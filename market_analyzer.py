@@ -23,10 +23,13 @@ except KeyError:
     st.error("API keys for YouTube and OpenAI are missing in Streamlit secrets.")
     st.stop()
 
-# Load Metadata
+# Load Metadata with Diagnostics
 if os.path.exists('competitor_podcast_videos.csv'):
     df = pd.read_csv('competitor_podcast_videos.csv')
-    df['published_at'] = pd.to_datetime(df['published_at'])  # Ensure date compatibility
+    df['published_at'] = pd.to_datetime(df['published_at'])
+    # Diagnostic: Check rows per podcast
+    st.write("Data Loaded - Row Counts per Podcast:")
+    st.write(df['podcast_name'].value_counts())
 else:
     st.error("Run the data collection script first to generate 'competitor_podcast_videos.csv'.")
     st.stop()
@@ -50,7 +53,7 @@ if not os.path.exists("data/podcast_chroma.db"):
     st.error("Vector store not found. Run the data collection script.")
     st.stop()
 
-# Enhanced Database Summary with Richer Context
+# Enhanced Database Summary with Full Context
 def generate_db_summary(df, vectorstore):
     podcast_counts = df['podcast_name'].value_counts().to_dict()
     metadata_fields = list(df.columns)
@@ -58,19 +61,19 @@ def generate_db_summary(df, vectorstore):
     sample_docs = vectorstore.similarity_search("common topics", k=5)
     sample_text = " ".join([doc.page_content[:200] for doc in sample_docs])
     avg_views = df.groupby('podcast_name')['view_count'].mean().round().astype(int).to_dict()
-    # Larger data snapshot for clarity
-    data_snapshot = df[['podcast_name', 'title', 'view_count', 'published_at']].sort_values('view_count', ascending=False).head(10).to_string(index=False)
+    # Podcast-specific snapshot for Steven Bartlett
+    bartlett_df = df[df['podcast_name'] == "Steven Bartlett – Diary of a CEO"].sort_values('view_count', ascending=False).head(15).to_string(index=False)
     summary = (
         f"Database Overview:\n"
         f"- Podcasts: {', '.join(COMPETITOR_NAMES)}\n"
         f"- Episode Counts: {', '.join([f'{name}: {count}' for name, count in podcast_counts.items()])}\n"
         f"- Avg Views: {', '.join([f'{name}: {views}' for name, views in avg_views.items()])}\n"
-        f"- Metadata Fields: {', '.join(metadata_fields)} (e.g., view_count, like_count, published_at)\n"
+        f"- Metadata Fields: {', '.join(metadata_fields)}\n"
         f"- Total Episodes: {total_episodes}\n"
         f"- Transcript Sample: Common topics include {sample_text[:100]}...\n"
-        f"- Data Snapshot (top 10 by view_count):\n{data_snapshot}\n"
+        f"- Sample Data for Steven Bartlett – Diary of a CEO (top 15 by view_count):\n{bartlett_df}\n"
         f"Creators map to podcasts: {', '.join([f'{k} → {v}' for k, v in COMPETITORS.items()])}.\n"
-        f"Full metadata is in a pandas DataFrame 'df' with {len(df)} rows—use it flexibly for any query."
+        f"Full metadata is in 'df' with {len(df)} rows—use ALL available data for queries."
     )
     return summary
 
@@ -81,10 +84,10 @@ msgs = StreamlitChatMessageHistory(key="langchain_messages")
 if "welcome_added" not in st.session_state:
     st.session_state.welcome_added = False
 if not msgs.messages and not st.session_state.welcome_added:
-    msgs.add_ai_message(f"I have data on these podcasts: {', '.join(COMPETITOR_NAMES)}. Ask me anything—top videos, trends, insights—and I’ll dive in with precision!")
+    msgs.add_ai_message(f"I have data on these podcasts: {', '.join(COMPETITOR_NAMES)}. Ask me anything—I’ll use all the data to answer precisely!")
     st.session_state.welcome_added = True
 
-# Fully LLM-Driven RAG Chain with Explicit Instructions
+# LLM-Driven RAG Chain with Debugging
 def create_rag_chain(df):
     retriever = vectorstore.as_retriever(search_kwargs={"k": 10})
     llm = ChatOpenAI(model="gpt-4o", temperature=0.7, api_key=OPENAI_API_KEY, max_tokens=4000)
@@ -98,16 +101,16 @@ def create_rag_chain(df):
 
     qa_system_prompt = (
         f"{db_summary}\n\n"
-        "You are a highly intelligent assistant analyzing a podcast database. Answer every question naturally and accurately using:\n"
-        "- Transcripts: In the context below for content insights (topics, strategies, themes).\n"
-        "- Metadata: The pandas DataFrame 'df' (columns: {', '.join(df.columns)}) for stats. Treat 'df' as a flexible database—filter, sort, group as needed.\n"
-        "Key Instructions:\n"
-        "- For 'top N' requests (e.g., 'top 10 videos'), ALWAYS extract the exact number N (e.g., 10) from the question and return exactly N items. Do NOT default to 5 unless explicitly asked for 'top 5'.\n"
-        "- Map creator names (e.g., 'Steven Bartlett') to podcasts via COMPETITORS.\n"
-        "- Metrics: Infer from context (e.g., 'videos' → view_count, 'likes' → like_count, 'comments' → comment_count) or default to view_count if unclear.\n"
-        "- Format clearly: For top lists, use numbered items (e.g., '1. Title (date): X views'). For insights, blend stats and content.\n"
-        "- Handle complex queries (e.g., 'why is X popular?') by combining stats and transcripts.\n"
-        "If data is missing, say 'I don’t have that info' and suggest the Dashboard. Use chat history for context.\n\n"
+        "You are a highly intelligent assistant analyzing a podcast database. Answer naturally and accurately using:\n"
+        "- Transcripts: Context below for content insights.\n"
+        "- Metadata: 'df' (columns: {', '.join(df.columns)}) for stats. Treat 'df' as a database—filter, sort, group freely.\n"
+        "Critical Rules:\n"
+        "- For 'top N' requests (e.g., 'top 10 videos'), ALWAYS use the exact number N (e.g., 10) specified. NEVER default to 5 unless explicitly asked 'top 5'. Check 'df' for all available entries.\n"
+        "- Map creators (e.g., 'Steven Bartlett') to podcasts via COMPETITORS.\n"
+        "- Metrics: Infer from context (e.g., 'videos' → view_count, 'likes' → like_count) or default to view_count.\n"
+        "- Format: Numbered lists for top items (e.g., '1. Title (date): X views'). Blend stats and content for insights.\n"
+        "- Debugging: If asked for N items but fewer are returned, explain why (e.g., 'Only X entries available in df').\n"
+        "Use ALL data in 'df', not just the snapshot. If data is missing, say 'I don’t have that info'. Use chat history for context.\n\n"
         "{context}"
     )
     qa_prompt = ChatPromptTemplate.from_messages([
@@ -145,7 +148,7 @@ with tab1:
         fig = px.line(filtered_df, x='published_at', y='view_count', color='podcast_name', title="Views by Episode")
         st.plotly_chart(fig)
 
-# Tab 2: Chat Analyzer (Tuned for Precision)
+# Tab 2: Chat Analyzer with Diagnostics
 with tab2:
     st.subheader("Ask About Your Competitors")
     show_history = st.checkbox("Show Conversation History", value=True)
@@ -157,13 +160,18 @@ with tab2:
         st.write("History hidden. Toggle 'Show Conversation History' to view past messages.")
 
     if question := st.chat_input("E.g., 'Top 10 videos for Steven Bartlett' or 'Why is Jay Shetty popular?'"):
-        with st.spinner("Analyzing with precision..."):
+        with st.spinner("Analyzing..."):
             msgs.add_user_message(question)
             if show_history:
                 st.chat_message("human").write(question)
 
             response = rag_chain.invoke({"input": question}, config={"configurable": {"session_id": "any"}})
             response = response['answer']
+
+            # Diagnostic: Show Steven Bartlett’s row count in response if relevant
+            if "Steven Bartlett" in question:
+                bartlett_count = len(df[df['podcast_name'] == "Steven Bartlett – Diary of a CEO"])
+                response += f"\n\n[Debug: {bartlett_count} entries available for Steven Bartlett – Diary of a CEO in df]"
 
             msgs.add_ai_message(response)
             if show_history:
