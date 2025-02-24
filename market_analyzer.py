@@ -50,7 +50,7 @@ if not os.path.exists("data/podcast_chroma.db"):
     st.error("Vector store not found. Run the data collection script.")
     st.stop()
 
-# Enhanced Database Summary with Data Snapshot
+# Enhanced Database Summary with Richer Context
 def generate_db_summary(df, vectorstore):
     podcast_counts = df['podcast_name'].value_counts().to_dict()
     metadata_fields = list(df.columns)
@@ -58,8 +58,8 @@ def generate_db_summary(df, vectorstore):
     sample_docs = vectorstore.similarity_search("common topics", k=5)
     sample_text = " ".join([doc.page_content[:200] for doc in sample_docs])
     avg_views = df.groupby('podcast_name')['view_count'].mean().round().astype(int).to_dict()
-    # Small data snapshot for LLM context
-    data_snapshot = df[['podcast_name', 'title', 'view_count', 'published_at']].head(5).to_string(index=False)
+    # Larger data snapshot for clarity
+    data_snapshot = df[['podcast_name', 'title', 'view_count', 'published_at']].sort_values('view_count', ascending=False).head(10).to_string(index=False)
     summary = (
         f"Database Overview:\n"
         f"- Podcasts: {', '.join(COMPETITOR_NAMES)}\n"
@@ -68,9 +68,9 @@ def generate_db_summary(df, vectorstore):
         f"- Metadata Fields: {', '.join(metadata_fields)} (e.g., view_count, like_count, published_at)\n"
         f"- Total Episodes: {total_episodes}\n"
         f"- Transcript Sample: Common topics include {sample_text[:100]}...\n"
-        f"- Data Snapshot (sample):\n{data_snapshot}\n"
+        f"- Data Snapshot (top 10 by view_count):\n{data_snapshot}\n"
         f"Creators map to podcasts: {', '.join([f'{k} → {v}' for k, v in COMPETITORS.items()])}.\n"
-        f"Full metadata is in a pandas DataFrame 'df' with {len(df)} rows."
+        f"Full metadata is in a pandas DataFrame 'df' with {len(df)} rows—use it flexibly for any query."
     )
     return summary
 
@@ -81,10 +81,10 @@ msgs = StreamlitChatMessageHistory(key="langchain_messages")
 if "welcome_added" not in st.session_state:
     st.session_state.welcome_added = False
 if not msgs.messages and not st.session_state.welcome_added:
-    msgs.add_ai_message(f"I have data on these podcasts: {', '.join(COMPETITOR_NAMES)}. Ask me anything—top videos, trends, deep insights—and I’ll dig in!")
+    msgs.add_ai_message(f"I have data on these podcasts: {', '.join(COMPETITOR_NAMES)}. Ask me anything—top videos, trends, insights—and I’ll dive in with precision!")
     st.session_state.welcome_added = True
 
-# Fully LLM-Driven RAG Chain
+# Fully LLM-Driven RAG Chain with Explicit Instructions
 def create_rag_chain(df):
     retriever = vectorstore.as_retriever(search_kwargs={"k": 10})
     llm = ChatOpenAI(model="gpt-4o", temperature=0.7, api_key=OPENAI_API_KEY, max_tokens=4000)
@@ -98,12 +98,15 @@ def create_rag_chain(df):
 
     qa_system_prompt = (
         f"{db_summary}\n\n"
-        "You are a highly intelligent assistant analyzing a podcast database. Answer all questions naturally and deeply using:\n"
+        "You are a highly intelligent assistant analyzing a podcast database. Answer every question naturally and accurately using:\n"
         "- Transcripts: In the context below for content insights (topics, strategies, themes).\n"
-        "- Metadata: The pandas DataFrame 'df' (columns: {', '.join(df.columns)}) for stats (e.g., top videos, trends). "
-        "Imagine you can query 'df' like a database—filter, sort, group, etc.—based on the user’s request.\n"
-        "Resolve creator names (e.g., 'Steven Bartlett') to podcasts via COMPETITORS. Extract numbers (e.g., 'top 10' → 10) and metrics (e.g., 'views' → view_count, 'likes' → like_count) from the question. "
-        "For complex queries (e.g., 'why is X popular?'), blend stats and content. Format responses clearly (e.g., lists for top videos). "
+        "- Metadata: The pandas DataFrame 'df' (columns: {', '.join(df.columns)}) for stats. Treat 'df' as a flexible database—filter, sort, group as needed.\n"
+        "Key Instructions:\n"
+        "- For 'top N' requests (e.g., 'top 10 videos'), ALWAYS extract the exact number N (e.g., 10) from the question and return exactly N items. Do NOT default to 5 unless explicitly asked for 'top 5'.\n"
+        "- Map creator names (e.g., 'Steven Bartlett') to podcasts via COMPETITORS.\n"
+        "- Metrics: Infer from context (e.g., 'videos' → view_count, 'likes' → like_count, 'comments' → comment_count) or default to view_count if unclear.\n"
+        "- Format clearly: For top lists, use numbered items (e.g., '1. Title (date): X views'). For insights, blend stats and content.\n"
+        "- Handle complex queries (e.g., 'why is X popular?') by combining stats and transcripts.\n"
         "If data is missing, say 'I don’t have that info' and suggest the Dashboard. Use chat history for context.\n\n"
         "{context}"
     )
@@ -127,7 +130,7 @@ rag_chain = create_rag_chain(df)
 # UI Layout: Tabs
 tab1, tab2, tab3 = st.tabs(["Dashboard", "Chat Analyzer", "Content Trends"])
 
-# Tab 1: Dashboard (Kept from Last Version)
+# Tab 1: Dashboard (Unchanged)
 with tab1:
     st.subheader("Competitor Stats")
     podcast_filter = st.multiselect("Select Podcasts", df['podcast_name'].unique(), default=df['podcast_name'].unique())
@@ -142,7 +145,7 @@ with tab1:
         fig = px.line(filtered_df, x='published_at', y='view_count', color='podcast_name', title="Views by Episode")
         st.plotly_chart(fig)
 
-# Tab 2: Chat Analyzer (Fully LLM-Driven)
+# Tab 2: Chat Analyzer (Tuned for Precision)
 with tab2:
     st.subheader("Ask About Your Competitors")
     show_history = st.checkbox("Show Conversation History", value=True)
@@ -154,12 +157,11 @@ with tab2:
         st.write("History hidden. Toggle 'Show Conversation History' to view past messages.")
 
     if question := st.chat_input("E.g., 'Top 10 videos for Steven Bartlett' or 'Why is Jay Shetty popular?'"):
-        with st.spinner("Thinking deeply..."):
+        with st.spinner("Analyzing with precision..."):
             msgs.add_user_message(question)
             if show_history:
                 st.chat_message("human").write(question)
 
-            # Let the LLM handle everything
             response = rag_chain.invoke({"input": question}, config={"configurable": {"session_id": "any"}})
             response = response['answer']
 
@@ -167,7 +169,7 @@ with tab2:
             if show_history:
                 st.chat_message("ai").write(response)
 
-# Tab 3: Content Trends (Kept from Last Version)
+# Tab 3: Content Trends (Unchanged)
 with tab3:
     st.subheader("Trending Topics & Insights")
     col1, col2 = st.columns(2)
