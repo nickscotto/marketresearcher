@@ -10,4 +10,3 @@ chromadb
 openai
 streamlit
 plotly
-sqlite
