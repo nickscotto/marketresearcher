@@ -10,3 +10,4 @@ chromadb>=0.5.5                    # For Chroma vector store (used via langchain
 openai>=1.45.0                     # For OpenAI API integration (used by langchain_openai)
 streamlit>=1.38.0                  # For streamlit (web app interface)
 plotly
+sqlite=3.36.0
