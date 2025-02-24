@@ -1,6 +1,3 @@
-import sys
-import pysqlite3
-sys.modules["sqlite3"] = pysqlite3
 import os
 import streamlit as st
 import pandas as pd
@@ -12,6 +9,9 @@ from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 from langchain.chains import create_history_aware_retriever, create_retrieval_chain
 from langchain.chains.combine_documents import create_stuff_documents_chain
 import plotly.express as px
+import re
+from textblob import TextBlob  # For basic sentiment analysis
+from datetime import datetime
 
 # Streamlit Config
 st.set_page_config(page_title="Podcast Competitor Analyzer", layout="wide")
@@ -22,12 +22,13 @@ try:
     YOUTUBE_API_KEY = st.secrets["youtube"]
     OPENAI_API_KEY = st.secrets["openai"]
 except KeyError:
-    st.error("API keys for YouTube and OpenAI are missing in Streamlit secrets. Please configure them in your secrets.toml or Streamlit Cloud settings.")
+    st.error("API keys for YouTube and OpenAI are missing in Streamlit secrets.")
     st.stop()
 
 # Load Metadata
 if os.path.exists('competitor_podcast_videos.csv'):
     df = pd.read_csv('competitor_podcast_videos.csv')
+    df['published_at'] = pd.to_datetime(df['published_at'])  # Ensure date compatibility
 else:
     st.error("Run the data collection script first to generate 'competitor_podcast_videos.csv'.")
     st.stop()
@@ -51,21 +52,22 @@ if not os.path.exists("data/podcast_chroma.db"):
     st.error("Vector store not found. Run the data collection script.")
     st.stop()
 
-# Generate Database Summary
+# Enhanced Database Summary
 def generate_db_summary(df, vectorstore):
     podcast_counts = df['podcast_name'].value_counts().to_dict()
     metadata_fields = list(df.columns)
     total_episodes = len(df)
     sample_docs = vectorstore.similarity_search("common topics", k=5)
     sample_text = " ".join([doc.page_content[:200] for doc in sample_docs])
+    avg_views = df.groupby('podcast_name')['view_count'].mean().round().astype(int).to_dict()
     summary = (
         f"Database Overview:\n"
         f"- Podcasts: {', '.join(COMPETITOR_NAMES)}\n"
         f"- Episode Counts: {', '.join([f'{name}: {count}' for name, count in podcast_counts.items()])}\n"
-        f"- Metadata Fields: {', '.join(metadata_fields)} (e.g., view_count, like_count, title)\n"
+        f"- Avg Views: {', '.join([f'{name}: {views}' for name, views in avg_views.items()])}\n"
+        f"- Metadata Fields: {', '.join(metadata_fields)} (e.g., view_count, like_count, published_at)\n"
         f"- Total Episodes: {total_episodes}\n"
         f"- Transcript Sample: Common topics include {sample_text[:100]}...\n"
-        f"Use metadata for stats (e.g., view_count, top videos) and transcripts for content. "
         f"Creators map to podcasts: {', '.join([f'{k} → {v}' for k, v in COMPETITORS.items()])}."
     )
     return summary
@@ -77,13 +79,59 @@ msgs = StreamlitChatMessageHistory(key="langchain_messages")
 if "welcome_added" not in st.session_state:
     st.session_state.welcome_added = False
 if not msgs.messages and not st.session_state.welcome_added:
-    msgs.add_ai_message(f"I have data on these podcasts: {', '.join(COMPETITOR_NAMES)}. Ask me anything!")
+    msgs.add_ai_message(f"I have data on these podcasts: {', '.join(COMPETITOR_NAMES)}. Ask me anything—top videos, trends, comparisons, or deep dives!")
     st.session_state.welcome_added = True
 
-# RAG Chain Setup
-def create_rag_chain():
+# Advanced Stats and Analysis Functions
+def fetch_advanced_stats(query_type, podcast_names, n=5, metric="view_count", time_period=None):
+    if not all(p in COMPETITOR_NAMES for p in podcast_names):
+        invalid = [p for p in podcast_names if p not in COMPETITOR_NAMES]
+        return f"I don’t have data on {', '.join(invalid)}. I only track: {', '.join(COMPETITOR_NAMES)}."
+    
+    filtered_df = df[df['podcast_name'].isin(podcast_names)]
+    if time_period:
+        today = datetime.now()
+        if "last year" in time_period.lower():
+            filtered_df = filtered_df[filtered_df['published_at'] > today.replace(year=today.year - 1)]
+    
+    if filtered_df.empty:
+        return f"No data found for {', '.join(podcast_names)} in the specified scope."
+
+    if query_type == "top_videos":
+        result = f"Top {n} videos for {', '.join(podcast_names)} by {metric}:\n"
+        top_df = filtered_df.sort_values(metric, ascending=False).head(n)
+        for i, row in top_df.iterrows():
+            result += f"- '{row['title']}' ({row['podcast_name']}, {row['published_at'].date()}): {row[metric]} {metric.replace('_count', 's')}\n"
+        return result
+    
+    elif query_type == "comparison":
+        stats = filtered_df.groupby('podcast_name').agg({
+            'view_count': ['mean', 'sum'],
+            'like_count': ['mean'],
+            'comment_count': ['mean']
+        }).round().astype(int)
+        result = f"Comparison of {', '.join(podcast_names)}:\n"
+        for podcast in podcast_names:
+            if podcast in stats.index:
+                result += (f"- {podcast}: Avg Views: {stats.loc[podcast, ('view_count', 'mean')]}, "
+                          f"Total Views: {stats.loc[podcast, ('view_count', 'sum')]}, "
+                          f"Avg Likes: {stats.loc[podcast, ('like_count', 'mean')]}, "
+                          f"Avg Comments: {stats.loc[podcast, ('comment_count', 'mean')]}\n")
+        return result
+    
+    elif query_type == "trend":
+        trend_df = filtered_df.groupby([pd.Grouper(key='published_at', freq='M'), 'podcast_name'])[metric].mean().unstack().fillna(0)
+        result = f"Trend analysis for {metric} over time:\n"
+        for podcast in podcast_names:
+            if podcast in trend_df.columns:
+                recent = trend_df[podcast].iloc[-3:].mean().round()
+                result += f"- {podcast}: Avg {metric} (last 3 months): {recent}\n"
+        return result
+
+# RAG Chain with Advanced Capabilities
+def create_rag_chain(df):
     retriever = vectorstore.as_retriever(search_kwargs={"k": 10})
-    llm = ChatOpenAI(model="gpt-4o-mini", temperature=0.7, api_key=OPENAI_API_KEY, max_tokens=4000)
+    llm = ChatOpenAI(model="gpt-4o", temperature=0.7, api_key=OPENAI_API_KEY, max_tokens=4000)  # Upgrade to gpt-4o for deeper analysis
 
     contextualize_q_prompt = ChatPromptTemplate.from_messages([
         ("system", "Reformulate the question as a standalone query based on chat history, using creator names (e.g., 'Jay Shetty') to infer the podcast if clear."),
@@ -94,12 +142,16 @@ def create_rag_chain():
 
     qa_system_prompt = (
         f"{db_summary}\n\n"
-        "You are an assistant analyzing the podcast database. "
-        "For stats questions (e.g., view counts, top videos), use the metadata fields directly. "
-        "For content questions (e.g., topics, strategies), use the transcripts in the context below. "
-        "Answer concisely with examples if possible. "
-        "If data is missing, say 'I don’t have that info' and suggest checking the Dashboard for stats. "
-        "Use chat history and creator associations (e.g., 'Jay Shetty' → 'Jay Shetty – On Purpose') to resolve queries without requiring the full podcast name if the context is clear.\n\n"
+        "You are an advanced assistant analyzing a podcast database. Handle all queries with depth:\n"
+        "- Content: Use transcripts in the context below for topics, strategies, or sentiment.\n"
+        "- Stats: Return 'STATS:<query_type>:<podcast_names>:<n>:<metric>:<time_period>' (e.g., 'STATS:top_videos:Jay Shetty – On Purpose:10:view_count:last year'). "
+        "  - query_type: 'top_videos', 'comparison', 'trend'.\n"
+        "  - podcast_names: comma-separated list (e.g., 'Jay Shetty – On Purpose,Tom Bilyeu – Impact Theory').\n"
+        "  - n: number of items (default 5).\n"
+        "  - metric: 'view_count', 'like_count', 'comment_count' (default 'view_count').\n"
+        "  - time_period: 'last year', 'all time' (default 'all time').\n"
+        "Resolve creator names to podcasts via COMPETITORS. For complex queries (e.g., 'why is Steven Bartlett popular?'), combine stats and content insights. "
+        "If data is missing, say 'I don’t have that info' and suggest the Dashboard. Use chat history for context.\n\n"
         "{context}"
     )
     qa_prompt = ChatPromptTemplate.from_messages([
@@ -109,7 +161,6 @@ def create_rag_chain():
     ])
     question_answer_chain = create_stuff_documents_chain(llm, qa_prompt)
     rag_chain = create_retrieval_chain(history_aware_retriever, question_answer_chain)
-
     return RunnableWithMessageHistory(
         rag_chain,
         lambda session_id: msgs,
@@ -118,19 +169,7 @@ def create_rag_chain():
         output_messages_key="answer",
     )
 
-rag_chain = create_rag_chain()
-
-# Function to Handle Metadata Queries
-def get_top_videos(podcast_name, top_n=5):
-    if podcast_name not in COMPETITOR_NAMES:
-        return f"I don’t have data on {podcast_name}. I only track: {', '.join(COMPETITOR_NAMES)}."
-    filtered_df = df[df['podcast_name'] == podcast_name].sort_values('view_count', ascending=False).head(top_n)
-    if filtered_df.empty:
-        return f"No data found for {podcast_name}."
-    result = f"Top {top_n} videos for {podcast_name}:\n"
-    for i, row in filtered_df.iterrows():
-        result += f"- '{row['title']}' ({row['published_at']}): {row['view_count']} views\n"
-    return result
+rag_chain = create_rag_chain(df)
 
 # UI Layout: Tabs
 tab1, tab2, tab3 = st.tabs(["Dashboard", "Chat Analyzer", "Content Trends"])
@@ -153,64 +192,47 @@ with tab1:
 # Tab 2: Chat Analyzer
 with tab2:
     st.subheader("Ask About Your Competitors")
-    
-    # Toggle for showing/hiding history
     show_history = st.checkbox("Show Conversation History", value=True)
     
-    # Display history if toggled on
     if show_history:
         for msg in msgs.messages:
             st.chat_message(msg.type).write(msg.content)
     else:
         st.write("History hidden. Toggle 'Show Conversation History' to view past messages.")
 
-    if question := st.chat_input("E.g., 'Jay Shetty’s top videos' or 'What does Tom Bilyeu talk about?'"):
-        with st.spinner("Analyzing..."):
-            # Add user message to history
+    if question := st.chat_input("E.g., 'Compare Jay Shetty and Steven Bartlett' or 'Why is Tom Bilyeu popular?'"):
+        with st.spinner("Digging deep..."):
             msgs.add_user_message(question)
             if show_history:
                 st.chat_message("human").write(question)
 
-            question_lower = question.lower()
-            stats_keywords = ["view", "views", "count", "counts", "top", "popular", "performance", "videos"]
-            if any(keyword in question_lower for keyword in stats_keywords):
-                # Try to match creator name to podcast
-                podcast_name = None
-                for creator, full_name in COMPETITORS.items():
-                    if creator.lower() in question_lower or full_name.lower().split(" – ")[1] in question_lower:
-                        podcast_name = full_name
-                        break
-                # Use chat history if no match in current query
-                if not podcast_name:
-                    last_podcast = None
-                    for msg in reversed(msgs.messages[-5:]):
-                        if msg.type == "human":
-                            for creator, full_name in COMPETITORS.items():
-                                if creator.lower() in msg.content.lower() or full_name.lower().split(" – ")[1] in msg.content.lower():
-                                    last_podcast = full_name
-                                    break
-                            if last_podcast:
-                                break
-                    podcast_name = last_podcast
-                if podcast_name:
-                    response = get_top_videos(podcast_name)
-                else:
-                    response = "Please specify a podcast or creator name from: " + ", ".join(COMPETITOR_NAMES)
-            else:
-                # Fallback to RAG for content questions
-                response = rag_chain.invoke({"input": question}, config={"configurable": {"session_id": "any"}})
-                response = response['answer']
+            response = rag_chain.invoke({"input": question}, config={"configurable": {"session_id": "any"}})
+            response = response['answer']
 
-            # Add AI response to history
+            if response.startswith("STATS:"):
+                parts = response.split(":")
+                query_type = parts[1]
+                podcast_names = parts[2].split(",")
+                n = int(parts[3]) if parts[3] else 5
+                metric = parts[4] if parts[4] else "view_count"
+                time_period = parts[5] if len(parts) > 5 else None
+                response = fetch_advanced_stats(query_type, podcast_names, n, metric, time_period)
+            
             msgs.add_ai_message(response)
             if show_history:
                 st.chat_message("ai").write(response)
 
 # Tab 3: Content Trends
 with tab3:
-    st.subheader("Trending Topics")
-    topic_query = "Summarize the most common topics across all podcasts in the dataset."
-    if st.button("Generate Topic Summary"):
-        with st.spinner("Extracting trends..."):
-            response = rag_chain.invoke({"input": topic_query}, config={"configurable": {"session_id": "any"}})
-            st.write(response['answer'])
+    st.subheader("Trending Topics & Insights")
+    col1, col2 = st.columns(2)
+    with col1:
+        if st.button("Generate Topic Summary"):
+            with st.spinner("Extracting trends..."):
+                response = rag_chain.invoke({"input": "Summarize the most common topics across all podcasts with examples."}, config={"configurable": {"session_id": "any"}})
+                st.write(response['answer'])
+    with col2:
+        if st.button("Predict Next Big Topic"):
+            with st.spinner("Predicting..."):
+                response = rag_chain.invoke({"input": "Based on trends and content, predict the next big topic for these podcasts."}, config={"configurable": {"session_id": "any"}})
+                st.write(response['answer'])
