@@ -98,8 +98,11 @@ def create_rag_chain(df):
     contextualize_q_prompt = ChatPromptTemplate.from_messages([
         ("system", "Reformulate the question as a standalone query based on chat history, using creator names (e.g., 'Jay Shetty') to infer the podcast if clear."),
         MessagesPlaceholder("chat_history"),
-        ("human", "{question}"),  # Updated to match the input key
+        ("human", "{input}"),  # Revert to "{input}" for history-aware retriever compatibility
     ])
+    st.write("Debug - contextualize_q_prompt:", contextualize_q_prompt)  # Debug the prompt
+    st.write("Debug - llm:", llm)  # Debug the LLM
+    st.write("Debug - retriever:", retriever)  # Debug the retriever
     history_aware_retriever = create_history_aware_retriever(llm, retriever, contextualize_q_prompt)
 
     qa_system_prompt = (
@@ -119,14 +122,14 @@ def create_rag_chain(df):
     qa_prompt = ChatPromptTemplate.from_messages([
         ("system", qa_system_prompt),
         MessagesPlaceholder("chat_history"),
-        ("human", "{question}"),  # Updated to match the input key
+        ("human", "{question}"),  # Keep "{question}" here for consistency with invoke calls
     ])
     question_answer_chain = create_stuff_documents_chain(llm, qa_prompt)
     rag_chain = create_retrieval_chain(history_aware_retriever, question_answer_chain)
     return RunnableWithMessageHistory(
         rag_chain,
         lambda session_id: msgs,
-        input_messages_key="input",
+        input_messages_key="input",  # Matches contextualize_q_prompt
         history_messages_key="chat_history",
         output_messages_key="answer",
     )
