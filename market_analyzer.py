@@ -55,29 +55,33 @@ if not os.path.exists("data/podcast_chroma.db"):
     st.error("Vector store not found. Run the data collection script.")
     st.stop()
 
+# Helper: escape braces in a string
+def escape_braces(s):
+    return s.replace("{", "{{").replace("}", "}}")
+
 # Enhanced Database Summary with Full Context
 def generate_db_summary(df, vectorstore):
     podcast_counts = df['podcast_name'].value_counts().to_dict()
     metadata_fields = list(df.columns)
+    metadata_fields_str = escape_braces(", ".join(metadata_fields))
     total_episodes = len(df)
     sample_docs = vectorstore.similarity_search("common topics", k=5)
     sample_text = " ".join([doc.page_content[:200] for doc in sample_docs])
     avg_views = df.groupby('podcast_name')['view_count'].mean().round().astype(int).to_dict()
     bartlett_df = df[df['podcast_name'] == "Steven Bartlett – Diary of a CEO"] \
                     .sort_values('view_count', ascending=False).head(15).to_string(index=False)
-    # Note the doubled braces for the placeholder to be filled later.
     summary = (
         f"Database Overview:\n"
         f"- Podcasts: {', '.join(COMPETITOR_NAMES)}\n"
         f"- Episode Counts: {', '.join([f'{name}: {count}' for name, count in podcast_counts.items()])}\n"
         f"- Avg Views: {', '.join([f'{name}: {views}' for name, views in avg_views.items()])}\n"
-        f"- Metadata Fields: {', '.join(metadata_fields)}\n"
+        f"- Metadata Fields: {metadata_fields_str}\n"
         f"- Total Episodes: {total_episodes}\n"
         f"- Transcript Sample: Common topics include {sample_text[:100]}...\n"
         f"- Sample Data for Steven Bartlett – Diary of a CEO (top 15 by view_count):\n{bartlett_df}\n"
         f"Creators map to podcasts: {', '.join([f'{k} → {v}' for k, v in COMPETITORS.items()])}.\n"
         f"Full metadata is in 'df' with {len(df)} rows—use ALL available data for queries.\n\n"
-        "{{context}}"  # Will appear as {context} when formatted later.
+        "{context}"  # This placeholder will be filled later.
     )
     return summary
 
@@ -106,12 +110,13 @@ def create_rag_chain(df):
 
     history_aware_retriever = create_history_aware_retriever(llm, retriever, contextualize_q_prompt)
 
-    # Use a triple-quoted f-string and double braces for placeholders intended for later formatting.
+    # Escape the column names for safe formatting.
+    columns_str = escape_braces(", ".join(df.columns))
     qa_system_prompt = f"""
 {db_summary}
 You are a highly intelligent assistant analyzing a podcast database. Answer naturally and accurately using:
 - Transcripts: Context below for content insights.
-- Metadata: 'df' (columns: {', '.join(df.columns)}) for stats. Treat 'df' as a database—filter, sort, group freely.
+- Metadata: 'df' (columns: {columns_str}) for stats. Treat 'df' as a database—filter, sort, group freely.
 Critical Rules (MUST FOLLOW WITHOUT EXCEPTION):
 - For 'top N' requests (e.g., 'top 10 videos'), YOU MUST RETURN EXACTLY N ITEMS IF THEY EXIST IN 'df'. IF FEWER THAN N EXIST, EXPLAIN: 'I could only find X entries for Y in df.'
 - Map creators (e.g., 'Steven Bartlett') to podcasts via COMPETITORS.
@@ -176,7 +181,7 @@ with tab2:
             if show_history:
                 st.chat_message("human").write(question)
 
-            # Build complete input with keys "input", "chat_history", and "context".
+            # Supply complete input with keys "input", "chat_history", and "context".
             user_input = {"input": question, "chat_history": "", "context": ""}
             st.write("Input to rag_chain:", user_input)
             response = rag_chain.invoke(user_input, config={"configurable": {"session_id": "any"}})
