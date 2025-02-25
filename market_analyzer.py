@@ -1,4 +1,4 @@
-import sys
+import sys 
 import pysqlite3
 sys.modules["sqlite3"] = pysqlite3
 import os
@@ -30,7 +30,6 @@ except KeyError:
 if os.path.exists('competitor_podcast_videos.csv'):
     df = pd.read_csv('competitor_podcast_videos.csv')
     df['published_at'] = pd.to_datetime(df['published_at'])
-    # Diagnostic: Check rows per podcast
     st.write("Data Loaded - Row Counts per Podcast:")
     st.write(df['podcast_name'].value_counts())
 else:
@@ -64,7 +63,6 @@ def generate_db_summary(df, vectorstore):
     sample_docs = vectorstore.similarity_search("common topics", k=5)
     sample_text = " ".join([doc.page_content[:200] for doc in sample_docs])
     avg_views = df.groupby('podcast_name')['view_count'].mean().round().astype(int).to_dict()
-    # Podcast-specific snapshot for Steven Bartlett
     bartlett_df = df[df['podcast_name'] == "Steven Bartlett – Diary of a CEO"].sort_values('view_count', ascending=False).head(15).to_string(index=False)
     summary = (
         f"Database Overview:\n"
@@ -90,18 +88,20 @@ if not msgs.messages and not st.session_state.welcome_added:
     msgs.add_ai_message(f"I have data on these podcasts: {', '.join(COMPETITOR_NAMES)}. Ask me anything—I’ll use all the data to answer precisely!")
     st.session_state.welcome_added = True
 
-# LLM-Driven RAG Chain with Fixed Input
+# LLM-Driven RAG Chain with Dynamic Input
 def create_rag_chain(df):
     retriever = vectorstore.as_retriever(search_kwargs={"k": 10})
     llm = ChatOpenAI(model="gpt-4o", temperature=0.7, api_key=OPENAI_API_KEY, max_tokens=4000)
 
+    # Reformulate the user's question using chat history
     contextualize_q_prompt = ChatPromptTemplate.from_messages([
         ("system", "Reformulate the question as a standalone query based on chat history, using creator names (e.g., 'Jay Shetty') to infer the podcast if clear."),
         MessagesPlaceholder("chat_history"),
-        ("human", "{input}"),  # Use "{input}" for consistency with history-aware retriever
+        ("human", "{input}"),
     ])
     history_aware_retriever = create_history_aware_retriever(llm, retriever, contextualize_q_prompt)
 
+    # Main QA prompt that leverages the dynamic input and chat history
     qa_system_prompt = (
         f"{db_summary}\n\n"
         "You are a highly intelligent assistant analyzing a podcast database. Answer naturally and accurately using:\n"
@@ -114,19 +114,18 @@ def create_rag_chain(df):
         "- Format: Numbered lists for top items (e.g., '1. Title (date): X views'). Blend stats and content for insights.\n"
         "- Debugging: If asked for N items but fewer are returned, explain why (e.g., 'Only X entries available in df').\n"
         "Expect input as a dictionary with an 'input' key (e.g., {'input': 'Top 10 videos for Steven Bartlett'}). Use ALL data in 'df', not just the snapshot. If data is missing, say 'I don’t have that info'. Use chat history for context.\n\n"
-        "{context}"
     )
     qa_prompt = ChatPromptTemplate.from_messages([
         ("system", qa_system_prompt),
         MessagesPlaceholder("chat_history"),
-        ("human", "{input}"),  # Use "{input}" for consistency with invoke calls
+        ("human", "{input}"),
     ])
     question_answer_chain = create_stuff_documents_chain(llm, qa_prompt)
     rag_chain = create_retrieval_chain(history_aware_retriever, question_answer_chain)
     return RunnableWithMessageHistory(
         rag_chain,
         lambda session_id: msgs,
-        input_messages_key="input",  # Matches prompts and invoke calls
+        input_messages_key="input",
         history_messages_key="chat_history",
         output_messages_key="answer",
     )
@@ -136,7 +135,7 @@ rag_chain = create_rag_chain(df)
 # UI Layout: Tabs
 tab1, tab2, tab3 = st.tabs(["Dashboard", "Chat Analyzer", "Content Trends"])
 
-# Tab 1: Dashboard (Unchanged)
+# Tab 1: Dashboard
 with tab1:
     st.subheader("Competitor Stats")
     podcast_filter = st.multiselect("Select Podcasts", df['podcast_name'].unique(), default=df['podcast_name'].unique())
@@ -151,7 +150,7 @@ with tab1:
         fig = px.line(filtered_df, x='published_at', y='view_count', color='podcast_name', title="Views by Episode")
         st.plotly_chart(fig)
 
-# Tab 2: Chat Analyzer with Diagnostics and Fixed Input
+# Tab 2: Chat Analyzer with Diagnostics
 with tab2:
     st.subheader("Ask About Your Competitors")
     show_history = st.checkbox("Show Conversation History", value=True)
@@ -168,14 +167,11 @@ with tab2:
             if show_history:
                 st.chat_message("human").write(question)
 
-            # Debug the input
-            st.write("Input to rag_chain:", {"input": question})
             response = rag_chain.invoke({"input": question}, config={"configurable": {"session_id": "any"}})
-            st.write("Response from rag_chain:", response)  # Debug the response
             response = response['answer']
 
-            # Diagnostic: Show Steven Bartlett’s row count in response if relevant
-            if "Steven Bartlett" in question.lower():
+            # Optional debugging information
+            if "steven bartlett" in question.lower():
                 bartlett_count = len(df[df['podcast_name'] == "Steven Bartlett – Diary of a CEO"])
                 response += f"\n\n[Debug: {bartlett_count} entries available for Steven Bartlett – Diary of a CEO in df]"
 
@@ -183,7 +179,7 @@ with tab2:
             if show_history:
                 st.chat_message("ai").write(response)
 
-# Tab 3: Content Trends (Updated)
+# Tab 3: Content Trends
 with tab3:
     st.subheader("Trending Topics & Insights")
     col1, col2 = st.columns(2)
