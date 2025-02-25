@@ -76,7 +76,7 @@ def generate_db_summary(df, vectorstore):
         f"- Sample Data for Steven Bartlett – Diary of a CEO (top 15 by view_count):\n{bartlett_df}\n"
         f"Creators map to podcasts: {', '.join([f'{k} → {v}' for k, v in COMPETITORS.items()])}.\n"
         f"Full metadata is in 'df' with {len(df)} rows—use ALL available data for queries.\n\n"
-        "{context}"  # Placeholder for retrieved documents
+        "{context}"  # This placeholder will be replaced by retrieved docs
     )
     return summary
 
@@ -95,13 +95,12 @@ def create_rag_chain(df):
     retriever = vectorstore.as_retriever(search_kwargs={"k": 10})
     llm = ChatOpenAI(model="gpt-4o", temperature=0.7, api_key=OPENAI_API_KEY, max_tokens=4000)
 
-    # Create contextualization prompt without extra keyword args
+    # Contextualization prompt for the retriever
     contextualize_q_prompt = ChatPromptTemplate.from_messages([
         ("system", "Reformulate the question as a standalone query based on chat history, using creator names (e.g., 'Jay Shetty') to infer the podcast if clear."),
         MessagesPlaceholder("chat_history"),
         ("human", "{input}")
     ])
-    # Set expected input variables
     contextualize_q_prompt.input_variables = ["input", "chat_history"]
 
     history_aware_retriever = create_history_aware_retriever(llm, retriever, contextualize_q_prompt)
@@ -174,12 +173,14 @@ with tab2:
             if show_history:
                 st.chat_message("human").write(question)
 
-            st.write("Input to rag_chain:", {"input": question})
-            response = rag_chain.invoke({"input": question}, config={"configurable": {"session_id": "any"}})
+            # Supply default empty strings for missing keys
+            user_input = {"input": question, "chat_history": "", "context": ""}
+            st.write("Input to rag_chain:", user_input)
+            response = rag_chain.invoke(user_input, config={"configurable": {"session_id": "any"}})
             st.write("Response from rag_chain:", response)
             answer = response['answer']
 
-            if "Steven Bartlett" in question.lower():
+            if "steven bartlett" in question.lower():
                 bartlett_count = len(df[df['podcast_name'] == "Steven Bartlett – Diary of a CEO"])
                 answer += f"\n\n[Debug: {bartlett_count} entries available for Steven Bartlett – Diary of a CEO in df]"
 
@@ -194,10 +195,12 @@ with tab3:
     with col1:
         if st.button("Generate Topic Summary"):
             with st.spinner("Extracting trends..."):
-                response = rag_chain.invoke({"input": "Summarize the most common topics across all podcasts with examples."}, config={"configurable": {"session_id": "any"}})
+                user_input = {"input": "Summarize the most common topics across all podcasts with examples.", "chat_history": "", "context": ""}
+                response = rag_chain.invoke(user_input, config={"configurable": {"session_id": "any"}})
                 st.write(response['answer'])
     with col2:
         if st.button("Predict Next Big Topic"):
             with st.spinner("Predicting..."):
-                response = rag_chain.invoke({"input": "Based on trends and content, predict the next big topic for these podcasts."}, config={"configurable": {"session_id": "any"}})
+                user_input = {"input": "Based on trends and content, predict the next big topic for these podcasts.", "chat_history": "", "context": ""}
+                response = rag_chain.invoke(user_input, config={"configurable": {"session_id": "any"}})
                 st.write(response['answer'])
