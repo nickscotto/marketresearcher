@@ -1,13 +1,13 @@
-pysqlite3-binary==0.5.2  # Ensure SQLite compatibility for pysqlite3 override
-google-api-python-client>=2.0.0  # For YouTube API, stable recent version
-pyyaml>=6.0.0  # Common YAML parser, stable
-pandas>=2.0.0  # For data manipulation, recent stable
-yt-dlp>=2023.11.16  # For video downloading, recent stable
-youtube-transcript-api>=0.6.1  # For transcripts, recent stable
-langchain-community>=0.2.5  # Matches Chroma requirements
-langchain-openai>=0.1.7  # Compatible with langchain-community
-langchain-core>=0.2.9  # Core langchain functionality, aligned
-chromadb>=0.5.3  # Fixes the config/Settings issue, recent stable
-openai>=1.0.0  # For OpenAI API, recent stable
-streamlit>=1.30.0  # Recent stable Streamlit for UI, ensures compatibility
-plotly>=5.0.0  # For charts, recent stable
+pysqlite3-binary>=0.5.2  # Use >= instead of == to allow newer patch versions (e.g., 0.5.4)
+google-api-python-client>=2.0.0
+pyyaml>=6.0.0
+pandas>=2.0.0
+yt-dlp>=2023.11.16
+youtube-transcript-api>=0.6.1
+langchain-community>=0.2.5
+langchain-openai>=0.1.7
+langchain-core>=0.2.9
+chromadb>=0.5.3
+openai>=1.0.0
+streamlit>=1.30.0
+plotly>=5.0.0
