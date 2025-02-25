@@ -63,7 +63,8 @@ def generate_db_summary(df, vectorstore):
     sample_docs = vectorstore.similarity_search("common topics", k=5)
     sample_text = " ".join([doc.page_content[:200] for doc in sample_docs])
     avg_views = df.groupby('podcast_name')['view_count'].mean().round().astype(int).to_dict()
-    bartlett_df = df[df['podcast_name'] == "Steven Bartlett – Diary of a CEO"].sort_values('view_count', ascending=False).head(15).to_string(index=False)
+    bartlett_df = df[df['podcast_name'] == "Steven Bartlett – Diary of a CEO"] \
+                    .sort_values('view_count', ascending=False).head(15).to_string(index=False)
     summary = (
         f"Database Overview:\n"
         f"- Podcasts: {', '.join(COMPETITOR_NAMES)}\n"
@@ -94,11 +95,14 @@ def create_rag_chain(df):
     retriever = vectorstore.as_retriever(search_kwargs={"k": 10})
     llm = ChatOpenAI(model="gpt-4o", temperature=0.7, api_key=OPENAI_API_KEY, max_tokens=4000)
 
+    # Create contextualization prompt without extra keyword args
     contextualize_q_prompt = ChatPromptTemplate.from_messages([
         ("system", "Reformulate the question as a standalone query based on chat history, using creator names (e.g., 'Jay Shetty') to infer the podcast if clear."),
         MessagesPlaceholder("chat_history"),
-        ("human", "{input}"),
-    ], input_variables=["input", "chat_history"])  # Explicit variables for this prompt
+        ("human", "{input}")
+    ])
+    # Set expected input variables
+    contextualize_q_prompt.input_variables = ["input", "chat_history"]
 
     history_aware_retriever = create_history_aware_retriever(llm, retriever, contextualize_q_prompt)
 
@@ -114,16 +118,15 @@ def create_rag_chain(df):
         "- Format: Numbered lists for top items (e.g., '1. Title (date): X views'). Blend stats and content for insights.\n"
         "- Debugging: If asked for N items but fewer are returned, explain why.\n"
         "Expect input as a dictionary with an 'input' key (e.g., {'input': 'Top 10 videos for Steven Bartlett'}). Use ALL data in 'df'. If data is missing, say 'I don’t have that info'. Use chat history for context.\n\n"
-        "{context}"  # This placeholder will be filled with retrieved documents
+        "{context}"  # Placeholder for retrieved documents
     )
-    qa_prompt = ChatPromptTemplate.from_messages(
-        [
-            ("system", qa_system_prompt),
-            MessagesPlaceholder("chat_history"),
-            ("human", "{input}"),
-        ],
-        input_variables=["input", "chat_history", "context"]  # Explicitly include "context"
-    )
+    qa_prompt = ChatPromptTemplate.from_messages([
+        ("system", qa_system_prompt),
+        MessagesPlaceholder("chat_history"),
+        ("human", "{input}")
+    ])
+    qa_prompt.input_variables = ["input", "chat_history", "context"]
+
     question_answer_chain = create_stuff_documents_chain(llm, qa_prompt)
     rag_chain = create_retrieval_chain(history_aware_retriever, question_answer_chain)
     return RunnableWithMessageHistory(
