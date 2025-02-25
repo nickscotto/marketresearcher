@@ -74,7 +74,8 @@ def generate_db_summary(df, vectorstore):
         f"- Transcript Sample: Common topics include {sample_text[:100]}...\n"
         f"- Sample Data for Steven Bartlett – Diary of a CEO (top 15 by view_count):\n{bartlett_df}\n"
         f"Creators map to podcasts: {', '.join([f'{k} → {v}' for k, v in COMPETITORS.items()])}.\n"
-        f"Full metadata is in 'df' with {len(df)} rows—use ALL available data for queries."
+        f"Full metadata is in 'df' with {len(df)} rows—use ALL available data for queries.\n\n"
+        "{context}"  # Placeholder for retrieved documents
     )
     return summary
 
@@ -88,38 +89,41 @@ if not msgs.messages and not st.session_state.welcome_added:
     msgs.add_ai_message(f"I have data on these podcasts: {', '.join(COMPETITOR_NAMES)}. Ask me anything—I’ll use all the data to answer precisely!")
     st.session_state.welcome_added = True
 
-# LLM-Driven RAG Chain with Dynamic Input
+# LLM-Driven RAG Chain with Fixed Input
 def create_rag_chain(df):
     retriever = vectorstore.as_retriever(search_kwargs={"k": 10})
     llm = ChatOpenAI(model="gpt-4o", temperature=0.7, api_key=OPENAI_API_KEY, max_tokens=4000)
 
-    # Reformulate the user's question using chat history
     contextualize_q_prompt = ChatPromptTemplate.from_messages([
         ("system", "Reformulate the question as a standalone query based on chat history, using creator names (e.g., 'Jay Shetty') to infer the podcast if clear."),
         MessagesPlaceholder("chat_history"),
         ("human", "{input}"),
-    ])
+    ], input_variables=["input", "chat_history"])  # Explicit variables for this prompt
+
     history_aware_retriever = create_history_aware_retriever(llm, retriever, contextualize_q_prompt)
 
-    # Main QA prompt that leverages the dynamic input and chat history
     qa_system_prompt = (
-        f"{db_summary}\n\n"
+        f"{db_summary}\n"
         "You are a highly intelligent assistant analyzing a podcast database. Answer naturally and accurately using:\n"
         "- Transcripts: Context below for content insights.\n"
         "- Metadata: 'df' (columns: {', '.join(df.columns)}) for stats. Treat 'df' as a database—filter, sort, group freely.\n"
         "Critical Rules (MUST FOLLOW WITHOUT EXCEPTION):\n"
-        "- For 'top N' requests (e.g., 'top 10 videos'), YOU MUST RETURN EXACTLY N ITEMS IF THEY EXIST IN 'df'. IF FEWER THAN N EXIST, EXPLAIN: 'I could only find X entries for Y in df.' DO NOT DEFAULT TO 5 UNDER ANY CIRCUMSTANCES UNLESS EXPLICITLY ASKED.\n"
+        "- For 'top N' requests (e.g., 'top 10 videos'), YOU MUST RETURN EXACTLY N ITEMS IF THEY EXIST IN 'df'. IF FEWER THAN N EXIST, EXPLAIN: 'I could only find X entries for Y in df.'\n"
         "- Map creators (e.g., 'Steven Bartlett') to podcasts via COMPETITORS.\n"
         "- Metrics: Infer from context (e.g., 'videos' → view_count, 'likes' → like_count) or default to view_count.\n"
         "- Format: Numbered lists for top items (e.g., '1. Title (date): X views'). Blend stats and content for insights.\n"
-        "- Debugging: If asked for N items but fewer are returned, explain why (e.g., 'Only X entries available in df').\n"
-        "Expect input as a dictionary with an 'input' key (e.g., {'input': 'Top 10 videos for Steven Bartlett'}). Use ALL data in 'df', not just the snapshot. If data is missing, say 'I don’t have that info'. Use chat history for context.\n\n"
+        "- Debugging: If asked for N items but fewer are returned, explain why.\n"
+        "Expect input as a dictionary with an 'input' key (e.g., {'input': 'Top 10 videos for Steven Bartlett'}). Use ALL data in 'df'. If data is missing, say 'I don’t have that info'. Use chat history for context.\n\n"
+        "{context}"  # This placeholder will be filled with retrieved documents
     )
-    qa_prompt = ChatPromptTemplate.from_messages([
-        ("system", qa_system_prompt),
-        MessagesPlaceholder("chat_history"),
-        ("human", "{input}"),
-    ])
+    qa_prompt = ChatPromptTemplate.from_messages(
+        [
+            ("system", qa_system_prompt),
+            MessagesPlaceholder("chat_history"),
+            ("human", "{input}"),
+        ],
+        input_variables=["input", "chat_history", "context"]  # Explicitly include "context"
+    )
     question_answer_chain = create_stuff_documents_chain(llm, qa_prompt)
     rag_chain = create_retrieval_chain(history_aware_retriever, question_answer_chain)
     return RunnableWithMessageHistory(
@@ -150,7 +154,7 @@ with tab1:
         fig = px.line(filtered_df, x='published_at', y='view_count', color='podcast_name', title="Views by Episode")
         st.plotly_chart(fig)
 
-# Tab 2: Chat Analyzer with Diagnostics
+# Tab 2: Chat Analyzer
 with tab2:
     st.subheader("Ask About Your Competitors")
     show_history = st.checkbox("Show Conversation History", value=True)
@@ -167,17 +171,18 @@ with tab2:
             if show_history:
                 st.chat_message("human").write(question)
 
+            st.write("Input to rag_chain:", {"input": question})
             response = rag_chain.invoke({"input": question}, config={"configurable": {"session_id": "any"}})
-            response = response['answer']
+            st.write("Response from rag_chain:", response)
+            answer = response['answer']
 
-            # Optional debugging information
-            if "steven bartlett" in question.lower():
+            if "Steven Bartlett" in question.lower():
                 bartlett_count = len(df[df['podcast_name'] == "Steven Bartlett – Diary of a CEO"])
-                response += f"\n\n[Debug: {bartlett_count} entries available for Steven Bartlett – Diary of a CEO in df]"
+                answer += f"\n\n[Debug: {bartlett_count} entries available for Steven Bartlett – Diary of a CEO in df]"
 
-            msgs.add_ai_message(response)
+            msgs.add_ai_message(answer)
             if show_history:
-                st.chat_message("ai").write(response)
+                st.chat_message("ai").write(answer)
 
 # Tab 3: Content Trends
 with tab3:
