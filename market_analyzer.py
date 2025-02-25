@@ -1,4 +1,4 @@
-import sys 
+import sys
 import pysqlite3
 sys.modules["sqlite3"] = pysqlite3
 import os
@@ -30,6 +30,7 @@ except KeyError:
 if os.path.exists('competitor_podcast_videos.csv'):
     df = pd.read_csv('competitor_podcast_videos.csv')
     df['published_at'] = pd.to_datetime(df['published_at'])
+    # Diagnostic: Check rows per podcast
     st.write("Data Loaded - Row Counts per Podcast:")
     st.write(df['podcast_name'].value_counts())
 else:
@@ -55,33 +56,27 @@ if not os.path.exists("data/podcast_chroma.db"):
     st.error("Vector store not found. Run the data collection script.")
     st.stop()
 
-# Helper: escape braces in a string
-def escape_braces(s):
-    return s.replace("{", "{{").replace("}", "}}")
-
 # Enhanced Database Summary with Full Context
 def generate_db_summary(df, vectorstore):
     podcast_counts = df['podcast_name'].value_counts().to_dict()
     metadata_fields = list(df.columns)
-    metadata_fields_str = escape_braces(", ".join(metadata_fields))
     total_episodes = len(df)
     sample_docs = vectorstore.similarity_search("common topics", k=5)
     sample_text = " ".join([doc.page_content[:200] for doc in sample_docs])
     avg_views = df.groupby('podcast_name')['view_count'].mean().round().astype(int).to_dict()
-    bartlett_df = df[df['podcast_name'] == "Steven Bartlett – Diary of a CEO"] \
-                    .sort_values('view_count', ascending=False).head(15).to_string(index=False)
+    # Podcast-specific snapshot for Steven Bartlett
+    bartlett_df = df[df['podcast_name'] == "Steven Bartlett – Diary of a CEO"].sort_values('view_count', ascending=False).head(15).to_string(index=False)
     summary = (
         f"Database Overview:\n"
         f"- Podcasts: {', '.join(COMPETITOR_NAMES)}\n"
         f"- Episode Counts: {', '.join([f'{name}: {count}' for name, count in podcast_counts.items()])}\n"
         f"- Avg Views: {', '.join([f'{name}: {views}' for name, views in avg_views.items()])}\n"
-        f"- Metadata Fields: {metadata_fields_str}\n"
+        f"- Metadata Fields: {', '.join(metadata_fields)}\n"
         f"- Total Episodes: {total_episodes}\n"
         f"- Transcript Sample: Common topics include {sample_text[:100]}...\n"
         f"- Sample Data for Steven Bartlett – Diary of a CEO (top 15 by view_count):\n{bartlett_df}\n"
         f"Creators map to podcasts: {', '.join([f'{k} → {v}' for k, v in COMPETITORS.items()])}.\n"
-        f"Full metadata is in 'df' with {len(df)} rows—use ALL available data for queries.\n\n"
-        "{context}"  # This placeholder will be filled later.
+        f"Full metadata is in 'df' with {len(df)} rows—use ALL available data for queries."
     )
     return summary
 
@@ -100,46 +95,38 @@ def create_rag_chain(df):
     retriever = vectorstore.as_retriever(search_kwargs={"k": 10})
     llm = ChatOpenAI(model="gpt-4o", temperature=0.7, api_key=OPENAI_API_KEY, max_tokens=4000)
 
-    # Contextualization prompt for the retriever.
     contextualize_q_prompt = ChatPromptTemplate.from_messages([
         ("system", "Reformulate the question as a standalone query based on chat history, using creator names (e.g., 'Jay Shetty') to infer the podcast if clear."),
         MessagesPlaceholder("chat_history"),
-        ("human", "{input}")
+        ("human", "{question}"),  # Changed from "{input}" to align with LangChain conventions
     ])
-    contextualize_q_prompt.input_variables = ["input", "chat_history"]
-
     history_aware_retriever = create_history_aware_retriever(llm, retriever, contextualize_q_prompt)
 
-    # Escape the column names for safe formatting.
-    columns_str = escape_braces(", ".join(df.columns))
-    qa_system_prompt = f"""
-{db_summary}
-You are a highly intelligent assistant analyzing a podcast database. Answer naturally and accurately using:
-- Transcripts: Context below for content insights.
-- Metadata: 'df' (columns: {columns_str}) for stats. Treat 'df' as a database—filter, sort, group freely.
-Critical Rules (MUST FOLLOW WITHOUT EXCEPTION):
-- For 'top N' requests (e.g., 'top 10 videos'), YOU MUST RETURN EXACTLY N ITEMS IF THEY EXIST IN 'df'. IF FEWER THAN N EXIST, EXPLAIN: 'I could only find X entries for Y in df.'
-- Map creators (e.g., 'Steven Bartlett') to podcasts via COMPETITORS.
-- Metrics: Infer from context (e.g., 'videos' → view_count, 'likes' → like_count) or default to view_count.
-- Format: Numbered lists for top items (e.g., '1. Title (date): X views'). Blend stats and content for insights.
-- Debugging: If asked for N items but fewer are returned, explain why.
-Expect input as a dictionary with an 'input' key (e.g., {{'input': 'Top 10 videos for Steven Bartlett'}}). Use ALL data in 'df'. If data is missing, say 'I don’t have that info'. Use chat history for context.
-
-{{context}}
-"""
+    qa_system_prompt = (
+        f"{db_summary}\n\n"
+        "You are a highly intelligent assistant analyzing a podcast database. Answer naturally and accurately using:\n"
+        "- Transcripts: Context below for content insights.\n"
+        "- Metadata: 'df' (columns: {', '.join(df.columns)}) for stats. Treat 'df' as a database—filter, sort, group freely.\n"
+        "Critical Rules (MUST FOLLOW WITHOUT EXCEPTION):\n"
+        "- For 'top N' requests (e.g., 'top 10 videos'), YOU MUST RETURN EXACTLY N ITEMS IF THEY EXIST IN 'df'. IF FEWER THAN N EXIST, EXPLAIN: 'I could only find X entries for Y in df.' DO NOT DEFAULT TO 5 UNDER ANY CIRCUMSTANCES UNLESS EXPLICITLY ASKED.\n"
+        "- Map creators (e.g., 'Steven Bartlett') to podcasts via COMPETITORS.\n"
+        "- Metrics: Infer from context (e.g., 'videos' → view_count, 'likes' → like_count) or default to view_count.\n"
+        "- Format: Numbered lists for top items (e.g., '1. Title (date): X views'). Blend stats and content for insights.\n"
+        "- Debugging: If asked for N items but fewer are returned, explain why (e.g., 'Only X entries available in df').\n"
+        "Expect input as a dictionary with a 'question' key (e.g., {'question': 'Top 10 videos for Steven Bartlett'}). Use ALL data in 'df', not just the snapshot. If data is missing, say 'I don’t have that info'. Use chat history for context.\n\n"
+        "{context}"
+    )
     qa_prompt = ChatPromptTemplate.from_messages([
         ("system", qa_system_prompt),
         MessagesPlaceholder("chat_history"),
-        ("human", "{input}")
+        ("human", "{question}"),  # Changed from "{input}" to align with LangChain conventions
     ])
-    qa_prompt.input_variables = ["input", "chat_history", "context"]
-
     question_answer_chain = create_stuff_documents_chain(llm, qa_prompt)
     rag_chain = create_retrieval_chain(history_aware_retriever, question_answer_chain)
     return RunnableWithMessageHistory(
         rag_chain,
         lambda session_id: msgs,
-        input_messages_key="input",
+        input_messages_key="question",  # Changed from "input" to match prompts
         history_messages_key="chat_history",
         output_messages_key="answer",
     )
@@ -149,7 +136,7 @@ rag_chain = create_rag_chain(df)
 # UI Layout: Tabs
 tab1, tab2, tab3 = st.tabs(["Dashboard", "Chat Analyzer", "Content Trends"])
 
-# Tab 1: Dashboard
+# Tab 1: Dashboard (Unchanged)
 with tab1:
     st.subheader("Competitor Stats")
     podcast_filter = st.multiselect("Select Podcasts", df['podcast_name'].unique(), default=df['podcast_name'].unique())
@@ -164,7 +151,7 @@ with tab1:
         fig = px.line(filtered_df, x='published_at', y='view_count', color='podcast_name', title="Views by Episode")
         st.plotly_chart(fig)
 
-# Tab 2: Chat Analyzer
+# Tab 2: Chat Analyzer with Diagnostics and Fixed Input
 with tab2:
     st.subheader("Ask About Your Competitors")
     show_history = st.checkbox("Show Conversation History", value=True)
@@ -181,38 +168,32 @@ with tab2:
             if show_history:
                 st.chat_message("human").write(question)
 
-            # Supply complete input with keys "input", "chat_history", and "context".
-            user_input = {"input": question, "chat_history": "", "context": ""}
-            st.write("Input to rag_chain:", user_input)
-            response = rag_chain.invoke(user_input, config={"configurable": {"session_id": "any"}})
-            st.write("Response from rag_chain:", response)
-            answer = response['answer']
+            # Debug the input
+            st.write("Input to rag_chain:", {"question": question})  # Changed from "input"
+            response = rag_chain.invoke({"question": question}, config={"configurable": {"session_id": "any"}})
+            st.write("Response from rag_chain:", response)  # Debug the response
+            response = response['answer']
 
-            if "steven bartlett" in question.lower():
+            # Diagnostic: Show Steven Bartlett’s row count in response if relevant
+            if "Steven Bartlett" in question.lower():
                 bartlett_count = len(df[df['podcast_name'] == "Steven Bartlett – Diary of a CEO"])
-                answer += f"\n\n[Debug: {bartlett_count} entries available for Steven Bartlett – Diary of a CEO in df]"
+                response += f"\n\n[Debug: {bartlett_count} entries available for Steven Bartlett – Diary of a CEO in df]"
 
-            msgs.add_ai_message(answer)
+            msgs.add_ai_message(response)
             if show_history:
-                st.chat_message("ai").write(answer)
+                st.chat_message("ai").write(response)
 
-# Tab 3: Content Trends
+# Tab 3: Content Trends (Updated)
 with tab3:
     st.subheader("Trending Topics & Insights")
     col1, col2 = st.columns(2)
     with col1:
         if st.button("Generate Topic Summary"):
             with st.spinner("Extracting trends..."):
-                user_input = {"input": "Summarize the most common topics across all podcasts with examples.",
-                              "chat_history": "",
-                              "context": ""}
-                response = rag_chain.invoke(user_input, config={"configurable": {"session_id": "any"}})
+                response = rag_chain.invoke({"question": "Summarize the most common topics across all podcasts with examples."}, config={"configurable": {"session_id": "any"}})
                 st.write(response['answer'])
     with col2:
         if st.button("Predict Next Big Topic"):
             with st.spinner("Predicting..."):
-                user_input = {"input": "Based on trends and content, predict the next big topic for these podcasts.",
-                              "chat_history": "",
-                              "context": ""}
-                response = rag_chain.invoke(user_input, config={"configurable": {"session_id": "any"}})
+                response = rag_chain.invoke({"question": "Based on trends and content, predict the next big topic for these podcasts."}, config={"configurable": {"session_id": "any"}})
                 st.write(response['answer'])
