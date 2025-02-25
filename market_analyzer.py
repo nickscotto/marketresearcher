@@ -71,7 +71,7 @@ def generate_db_summary(df, vectorstore):
         f"- Podcasts: {', '.join(COMPETITOR_NAMES)}\n"
         f"- Episode Counts: {', '.join([f'{name}: {count}' for name, count in podcast_counts.items()])}\n"
         f"- Avg Views: {', '.join([f'{name}: {views}' for name, views in avg_views.items()])}\n"
-        f"- Metadata Fields: {', '.join(metadata_fields)}\n"
+        f"- Metadata Fields: {', '.join(metadata_fields)}\n"  # Escaped to prevent variable interpretation
         f"- Total Episodes: {total_episodes}\n"
         f"- Transcript Sample: Common topics include {sample_text[:100]}...\n"
         f"- Sample Data for Steven Bartlett – Diary of a CEO (top 15 by view_count):\n{bartlett_df}\n"
@@ -98,7 +98,7 @@ def create_rag_chain(df):
     contextualize_q_prompt = ChatPromptTemplate.from_messages([
         ("system", "Reformulate the question as a standalone query based on chat history, using creator names (e.g., 'Jay Shetty') to infer the podcast if clear."),
         MessagesPlaceholder("chat_history"),
-        ("human", "{input}"),  # Updated to use "{input}" for compatibility with create_history_aware_retriever
+        ("human", "{input}"),  # Use "{input}" for compatibility with create_history_aware_retriever
     ])
     history_aware_retriever = create_history_aware_retriever(llm, retriever, contextualize_q_prompt)
 
@@ -106,7 +106,7 @@ def create_rag_chain(df):
         f"{db_summary}\n\n"
         "You are a highly intelligent assistant analyzing a podcast database. Answer naturally and accurately using:\n"
         "- Transcripts: Context below for content insights.\n"
-        "- Metadata: 'df' (columns: {', '.join(df.columns)}) for stats. Treat 'df' as a database—filter, sort, group freely.\n"
+        "- Metadata: 'df' (columns: {{', '.join(df.columns)}}) for stats. Treat 'df' as a database—filter, sort, group freely.\n"  # Escaped with double curly braces
         "Critical Rules (MUST FOLLOW WITHOUT EXCEPTION):\n"
         "- For 'top N' requests (e.g., 'top 10 videos'), YOU MUST RETURN EXACTLY N ITEMS IF THEY EXIST IN 'df'. IF FEWER THAN N EXIST, EXPLAIN: 'I could only find X entries for Y in df.' DO NOT DEFAULT TO 5 UNDER ANY CIRCUMSTANCES UNLESS EXPLICITLY ASKED.\n"
         "- Map creators (e.g., 'Steven Bartlett') to podcasts via COMPETITORS.\n"
@@ -119,7 +119,7 @@ def create_rag_chain(df):
     qa_prompt = ChatPromptTemplate.from_messages([
         ("system", qa_system_prompt),
         MessagesPlaceholder("chat_history"),
-        ("human", "{input}"),  # Updated to use "{input}" for consistency
+        ("human", "{input}"),  # Use "{input}" for consistency
     ])
     question_answer_chain = create_stuff_documents_chain(llm, qa_prompt)
     rag_chain = create_retrieval_chain(history_aware_retriever, question_answer_chain)
@@ -163,7 +163,7 @@ with tab2:
         st.write("History hidden. Toggle 'Show Conversation History' to view past messages.")
 
     if question := st.chat_input("E.g., 'Top 10 videos for Steven Bartlett' or 'Why is Jay Shetty popular?'"):
-        with st.spinner("Analyzing..."):
+        with st.spinner("Analyizing..."):
             msgs.add_user_message(question)
             if show_history:
                 st.chat_message("human").write(question)
