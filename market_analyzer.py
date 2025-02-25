@@ -98,7 +98,7 @@ def create_rag_chain(df):
     contextualize_q_prompt = ChatPromptTemplate.from_messages([
         ("system", "Reformulate the question as a standalone query based on chat history, using creator names (e.g., 'Jay Shetty') to infer the podcast if clear."),
         MessagesPlaceholder("chat_history"),
-        ("human", "{question}"),  # Changed from "{input}" to align with LangChain conventions
+        ("human", "{input}"),  # Updated to use "{input}" for compatibility with create_history_aware_retriever
     ])
     history_aware_retriever = create_history_aware_retriever(llm, retriever, contextualize_q_prompt)
 
@@ -113,20 +113,20 @@ def create_rag_chain(df):
         "- Metrics: Infer from context (e.g., 'videos' → view_count, 'likes' → like_count) or default to view_count.\n"
         "- Format: Numbered lists for top items (e.g., '1. Title (date): X views'). Blend stats and content for insights.\n"
         "- Debugging: If asked for N items but fewer are returned, explain why (e.g., 'Only X entries available in df').\n"
-        "Expect input as a dictionary with a 'question' key (e.g., {'question': 'Top 10 videos for Steven Bartlett'}). Use ALL data in 'df', not just the snapshot. If data is missing, say 'I don’t have that info'. Use chat history for context.\n\n"
+        "Expect input as a dictionary with an 'input' key (e.g., {'input': 'Top 10 videos for Steven Bartlett'}). Use ALL data in 'df', not just the snapshot. If data is missing, say 'I don’t have that info'. Use chat history for context.\n\n"
         "{context}"
     )
     qa_prompt = ChatPromptTemplate.from_messages([
         ("system", qa_system_prompt),
         MessagesPlaceholder("chat_history"),
-        ("human", "{question}"),  # Changed from "{input}" to align with LangChain conventions
+        ("human", "{input}"),  # Updated to use "{input}" for consistency
     ])
     question_answer_chain = create_stuff_documents_chain(llm, qa_prompt)
     rag_chain = create_retrieval_chain(history_aware_retriever, question_answer_chain)
     return RunnableWithMessageHistory(
         rag_chain,
         lambda session_id: msgs,
-        input_messages_key="question",  # Changed from "input" to match prompts
+        input_messages_key="input",  # Matches prompts and invoke calls
         history_messages_key="chat_history",
         output_messages_key="answer",
     )
@@ -169,8 +169,8 @@ with tab2:
                 st.chat_message("human").write(question)
 
             # Debug the input
-            st.write("Input to rag_chain:", {"question": question})  # Changed from "input"
-            response = rag_chain.invoke({"question": question}, config={"configurable": {"session_id": "any"}})
+            st.write("Input to rag_chain:", {"input": question})
+            response = rag_chain.invoke({"input": question}, config={"configurable": {"session_id": "any"}})
             st.write("Response from rag_chain:", response)  # Debug the response
             response = response['answer']
 
@@ -190,10 +190,10 @@ with tab3:
     with col1:
         if st.button("Generate Topic Summary"):
             with st.spinner("Extracting trends..."):
-                response = rag_chain.invoke({"question": "Summarize the most common topics across all podcasts with examples."}, config={"configurable": {"session_id": "any"}})
+                response = rag_chain.invoke({"input": "Summarize the most common topics across all podcasts with examples."}, config={"configurable": {"session_id": "any"}})
                 st.write(response['answer'])
     with col2:
         if st.button("Predict Next Big Topic"):
             with st.spinner("Predicting..."):
-                response = rag_chain.invoke({"question": "Based on trends and content, predict the next big topic for these podcasts."}, config={"configurable": {"session_id": "any"}})
+                response = rag_chain.invoke({"input": "Based on trends and content, predict the next big topic for these podcasts."}, config={"configurable": {"session_id": "any"}})
                 st.write(response['answer'])
