@@ -76,7 +76,7 @@ def generate_db_summary(df, vectorstore):
         f"- Sample Data for Steven Bartlett – Diary of a CEO (top 15 by view_count):\n{bartlett_df}\n"
         f"Creators map to podcasts: {', '.join([f'{k} → {v}' for k, v in COMPETITORS.items()])}.\n"
         f"Full metadata is in 'df' with {len(df)} rows—use ALL available data for queries.\n\n"
-        "{context}"  # This placeholder will be replaced by retrieved docs
+        "{context}"  # Placeholder for retrieved documents
     )
     return summary
 
@@ -173,7 +173,7 @@ with tab2:
             if show_history:
                 st.chat_message("human").write(question)
 
-            # Supply default empty strings for missing keys
+            # Build complete input with default empty strings for missing keys.
             user_input = {"input": question, "chat_history": "", "context": ""}
             st.write("Input to rag_chain:", user_input)
             response = rag_chain.invoke(user_input, config={"configurable": {"session_id": "any"}})
@@ -195,12 +195,16 @@ with tab3:
     with col1:
         if st.button("Generate Topic Summary"):
             with st.spinner("Extracting trends..."):
-                user_input = {"input": "Summarize the most common topics across all podcasts with examples.", "chat_history": "", "context": ""}
+                user_input = {"input": "Summarize the most common topics across all podcasts with examples.",
+                              "chat_history": "",
+                              "context": ""}
                 response = rag_chain.invoke(user_input, config={"configurable": {"session_id": "any"}})
                 st.write(response['answer'])
     with col2:
         if st.button("Predict Next Big Topic"):
             with st.spinner("Predicting..."):
-                user_input = {"input": "Based on trends and content, predict the next big topic for these podcasts.", "chat_history": "", "context": ""}
+                user_input = {"input": "Based on trends and content, predict the next big topic for these podcasts.",
+                              "chat_history": "",
+                              "context": ""}
                 response = rag_chain.invoke(user_input, config={"configurable": {"session_id": "any"}})
                 st.write(response['answer'])
