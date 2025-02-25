@@ -71,7 +71,7 @@ def generate_db_summary(df, vectorstore):
         f"- Podcasts: {', '.join(COMPETITOR_NAMES)}\n"
         f"- Episode Counts: {', '.join([f'{name}: {count}' for name, count in podcast_counts.items()])}\n"
         f"- Avg Views: {', '.join([f'{name}: {views}' for name, views in avg_views.items()])}\n"
-        f"- Metadata Fields: {{', '.join(df.columns)}}}\n"  # Escaped with double curly braces
+        f"- Metadata Fields: {{{', '.join(df.columns)}}}\n"  # Double-escaped with extra curly braces
         f"- Total Episodes: {total_episodes}\n"
         f"- Transcript Sample: Common topics include {sample_text[:100]}...\n"
         f"- Sample Data for Steven Bartlett – Diary of a CEO (top 15 by view_count):\n{bartlett_df}\n"
@@ -90,7 +90,7 @@ if not msgs.messages and not st.session_state.welcome_added:
     msgs.add_ai_message(f"I have data on these podcasts: {', '.join(COMPETITOR_NAMES)}. Ask me anything—I’ll use all the data to answer precisely!")
     st.session_state.welcome_added = True
 
-# LLM-Driven RAG Chain with Fixed Input
+# LLM-Driven RAG Chain with Fixed Input and Debugging
 def create_rag_chain(df):
     retriever = vectorstore.as_retriever(search_kwargs={"k": 10})
     llm = ChatOpenAI(model="gpt-4o", temperature=0.7, api_key=OPENAI_API_KEY, max_tokens=4000)
@@ -106,7 +106,7 @@ def create_rag_chain(df):
         f"{db_summary}\n\n"
         "You are a highly intelligent assistant analyzing a podcast database. Answer naturally and accurately using:\n"
         "- Transcripts: Context below for content insights.\n"
-        "- Metadata: 'df' (columns: {{', '.join(df.columns)}}) for stats. Treat 'df' as a database—filter, sort, group freely.\n"  # Escaped with double curly braces
+        "- Metadata: 'df' (columns: {{{', '.join(df.columns)}}}) for stats. Treat 'df' as a database—filter, sort, group freely.\n"  # Triple-escaped for safety
         "Critical Rules (MUST FOLLOW WITHOUT EXCEPTION):\n"
         "- For 'top N' requests (e.g., 'top 10 videos'), YOU MUST RETURN EXACTLY N ITEMS IF THEY EXIST IN 'df'. IF FEWER THAN N EXIST, EXPLAIN: 'I could only find X entries for Y in df.' DO NOT DEFAULT TO 5 UNDER ANY CIRCUMSTANCES UNLESS EXPLICITLY ASKED.\n"
         "- Map creators (e.g., 'Steven Bartlett') to podcasts via COMPETITORS.\n"
@@ -121,6 +121,7 @@ def create_rag_chain(df):
         MessagesPlaceholder("chat_history"),
         ("human", "{input}"),  # Use "{input}" for consistency
     ])
+    st.write("Debug - qa_prompt dict:", dict(qa_prompt.messages))  # Safe debugging
     question_answer_chain = create_stuff_documents_chain(llm, qa_prompt)
     rag_chain = create_retrieval_chain(history_aware_retriever, question_answer_chain)
     return RunnableWithMessageHistory(
@@ -168,9 +169,10 @@ with tab2:
             if show_history:
                 st.chat_message("human").write(question)
 
-            # Debug the input
-            st.write("Input to rag_chain:", {"input": question})
-            response = rag_chain.invoke({"input": question}, config={"configurable": {"session_id": "any"}})
+            # Supply complete input with keys "input", "chat_history", "context"
+            user_input = {"input": question, "chat_history": [msg.dict() for msg in msgs.messages], "context": ""}
+            st.write("Input to rag_chain:", user_input)
+            response = rag_chain.invoke(user_input, config={"configurable": {"session_id": "any"}})
             st.write("Response from rag_chain:", response)  # Debug the response
             response = response['answer']
 
@@ -190,10 +192,12 @@ with tab3:
     with col1:
         if st.button("Generate Topic Summary"):
             with st.spinner("Extracting trends..."):
-                response = rag_chain.invoke({"input": "Summarize the most common topics across all podcasts with examples."}, config={"configurable": {"session_id": "any"}})
+                user_input = {"input": "Summarize the most common topics across all podcasts with examples.", "chat_history": [msg.dict() for msg in msgs.messages], "context": ""}
+                response = rag_chain.invoke(user_input, config={"configurable": {"session_id": "any"}})
                 st.write(response['answer'])
     with col2:
         if st.button("Predict Next Big Topic"):
             with st.spinner("Predicting..."):
-                response = rag_chain.invoke({"input": "Based on trends and content, predict the next big topic for these podcasts."}, config={"configurable": {"session_id": "any"}})
+                user_input = {"input": "Based on trends and content, predict the next big topic for these podcasts.", "chat_history": [msg.dict() for msg in msgs.messages], "context": ""}
+                response = rag_chain.invoke(user_input, config={"configurable": {"session_id": "any"}})
                 st.write(response['answer'])
