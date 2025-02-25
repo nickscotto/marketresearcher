@@ -71,7 +71,7 @@ def generate_db_summary(df, vectorstore):
         f"- Podcasts: {', '.join(COMPETITOR_NAMES)}\n"
         f"- Episode Counts: {', '.join([f'{name}: {count}' for name, count in podcast_counts.items()])}\n"
         f"- Avg Views: {', '.join([f'{name}: {views}' for name, views in avg_views.items()])}\n"
-        f"- Metadata Fields: {', '.join(metadata_fields)}\n"  # Escaped to prevent variable interpretation
+        f"- Metadata Fields: {{', '.join(df.columns)}}}\n"  # Escaped with double curly braces
         f"- Total Episodes: {total_episodes}\n"
         f"- Transcript Sample: Common topics include {sample_text[:100]}...\n"
         f"- Sample Data for Steven Bartlett – Diary of a CEO (top 15 by view_count):\n{bartlett_df}\n"
@@ -163,7 +163,7 @@ with tab2:
         st.write("History hidden. Toggle 'Show Conversation History' to view past messages.")
 
     if question := st.chat_input("E.g., 'Top 10 videos for Steven Bartlett' or 'Why is Jay Shetty popular?'"):
-        with st.spinner("Analyizing..."):
+        with st.spinner("Analyzing..."):
             msgs.add_user_message(question)
             if show_history:
                 st.chat_message("human").write(question)
